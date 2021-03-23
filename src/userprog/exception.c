@@ -178,12 +178,12 @@ exit (int pointerStatus)
       struct list_elem *elem = list_tail(&parent->children);
       while ((elem = list_prev (elem)) != list_head (&parent->children))
         {
-          child = list_entry (elem, struct child_status, elem_child_status);
-          if (child->child_id == current->tid)
+          child = list_entry (elem, struct child_status, elem_status);
+          if (child->id == current->tid)
           {
             lock_acquire (&parent->lock_child);
-            child->is_exit_called = true;
-            child->child_exit_status = pointerStatus;
+            child->exit_called = true;
+            child->exit_status = pointerStatus;
             lock_release (&parent->lock_child);
           }
         }

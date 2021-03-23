@@ -61,10 +61,10 @@ process_execute (const char *file_name)
     child = calloc (1, sizeof *child);
     if (child != NULL) 
     {
-		child->child_id = tid;
-		child->is_exit_called = false;
-		child->has_been_waited = false;
-		list_push_back(&currentThread->children, &child->elem_child_status);
+		child->id = tid;
+		child->exit_called = false;
+		child->has_waited = false;
+		list_push_back(&currentThread->children, &child->elem_status);
     }
   }  
   return tid;
@@ -141,8 +141,8 @@ process_wait (tid_t child_tid)
      elem = list_tail (&currentThread->children);
      while ((elem = list_prev (elem)) != list_head (&currentThread->children))
        {
-         childStatus = list_entry(elem, struct child_status, elem_child_status);
-         if (childStatus->child_id == child_tid)
+         childStatus = list_entry(elem, struct child_status, elem_status);
+         if (childStatus->id == child_tid)
            break;
        }
 
@@ -153,12 +153,12 @@ process_wait (tid_t child_tid)
          lock_acquire(&currentThread->lock_child);
          while (thread_get_by_id (child_tid) != NULL)
            cond_wait (&currentThread->cond_child, &currentThread->lock_child);
-         if (!childStatus->is_exit_called || childStatus->has_been_waited)
+         if (!childStatus->exit_called || childStatus->has_waited)
            tidStatus = -1;
          else
            { 
-             tidStatus = childStatus->child_exit_status;
-             childStatus->has_been_waited = true;
+             tidStatus = childStatus->exit_status;
+             childStatus->has_waited = true;
            }
          lock_release(&currentThread->lock_child);
        }
@@ -200,7 +200,7 @@ process_exit (void)
   while (elem != list_tail(&currentThread->children))
     {
       next = list_next (elem);
-      childStatus = list_entry (elem, struct child_status, elem_child_status);
+      childStatus = list_entry (elem, struct child_status, elem_status);
       list_remove (elem);
       free (childStatus);
       elem = next;

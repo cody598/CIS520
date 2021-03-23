@@ -26,27 +26,16 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+
+/* Keeps information on each threads children */
 struct child_status {
-  tid_t child_id;
-  bool is_exit_called;
-  bool has_been_waited;
-  int child_exit_status;
-  struct list_elem elem_child_status;  
+  tid_t id;
+  bool exit_called;
+  bool has_waited;
+  int exit_status;
+  struct list_elem elem_status;  
 };
 
-
-/* A struct to keep track of a thread's children's information,
- * inclduing exit status, if it is terminated by kernel, and
- * if process_wait has been called successfully
- */
-struct waiting_child
-  {
-    tid_t child_id;                          // thread_id
-    int child_exit_status;
-    bool is_terminated_by_kernel;
-    bool has_been_waited;
-    struct list_elem elem_waiting_child;     // itself
-  };
 
 /* A kernel thread or user process.
 
