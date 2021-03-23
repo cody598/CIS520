@@ -20,12 +20,10 @@ struct file_descripton
   struct list_elem element;
 };
 
-/* a list of open files, represents all the files open by the user process
-   through syscalls. */
+/* List constaining open files, the ones open in user process. */
 struct list open_files; 
 
-/* the lock used by syscalls involving file system to ensure only one thread
-   at a time is accessing file system */
+/* The lock that makes sure a single thread accesses the file system at a time. */
 struct lock fs_lock;
 
 static void syscall_handler (struct intr_frame *);
@@ -44,7 +42,6 @@ static int write (int, const void *, unsigned);
 static void seek (int, unsigned);
 static unsigned tell (int);
 static void close (int);
-/* End of system call functions */
 
 static struct file_descripton *get_open_file (int);
 static void close_open_file (int);
@@ -52,6 +49,7 @@ bool is_valid_ptr (const void *);
 static int allocate_fd (void);
 void close_file_by_owner (tid_t);
 
+/* Initializes the system call */
 void
 syscall_init (void) 
 {
@@ -122,8 +120,7 @@ syscall_handler (struct intr_frame *f)
 }
 
 
-/* Terminates the current user program, returning status to the kernel.*/
-/* Exits the thread due to invalid addresses */
+/* Exits the thread due to invalid addresses. Terminates the active user program. */
 void
 exit (int pointerStatus)
 {
@@ -158,12 +155,9 @@ halt (void)
 pid_t
 exec (const char *cmd_line)
 {
-  /* a thread's id. When there is a user process within a kernel thread, we
-   * use one-to-one mapping from tid to pid, which means pid = tid
-   */
   tid_t tid;
   struct thread *current;
-  /* check if the user pinter is valid */
+  /* Checks to see if user pointer in correct/valid. */
   if (!is_valid_ptr (cmd_line))
     {
       exit (-1);
@@ -402,14 +396,7 @@ close_open_file (int fd)
   return ;
 }
 
-
-/* The kernel must be very careful about doing so, because the user can
- * pass a null pointer, a pointer to unmapped virtual memory, or a pointer
- * to kernel virtual address space (above PHYS_BASE). All of these types of
- * invalid pointers must be rejected without harm to the kernel or other
- * running processes, by terminating the offending process and freeing
- * its resources.
- */
+/* Protects the kernel from harm by checking if page is non-empty, if pointer is null, or if pointer is out of address space. */
 bool
 is_valid_ptr (const void *usr_ptr)
 {

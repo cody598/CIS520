@@ -26,7 +26,7 @@ static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
-   FILENAME.  The new thread may be scheduled (and may even exit)
+   filename.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
@@ -37,18 +37,16 @@ process_execute (const char *file_name)
   struct child_status *child; 
   struct thread *currentThread;
 
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
+  /* Make a copy of the filename.*/
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
   
-  /* Only assign argv[0] to thread's name */
   char *cmd_name, *args;
   cmd_name = strtok_r (fn_copy, " ", &args);
 
-  /* Create a new thread to execute FILE_NAME. */
+  /* Create a new thread in order to execute the given filename. */
   tid = thread_create (cmd_name, PRI_DEFAULT, start_process, args);
   if (tid == TID_ERROR)
   {
@@ -89,7 +87,7 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* If load failed, neutralize and get out. */
+  /* If load failed, get out. */
   if (!success)
     load_status = -1;
   else
@@ -184,13 +182,7 @@ process_exit (void)
   pd = currentThread->pagedir;
   if (pd != NULL) 
     {
-      /* Correct ordering here is crucial.  We must set
-         cur->pagedir to NULL before switching page directories,
-         so that a timer interrupt can't switch back to the
-         process page directory.  We must activate the base page
-         directory before destroying the process's page
-         directory, or our active page directory will be one
-         that's been freed (and cleared). */
+	  /* Set current threads page directory to null so it can't switch to process page directory. */
       currentThread->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
@@ -206,11 +198,11 @@ process_exit (void)
       elem = next;
     }
 
-  /*re-enable the file's writable property*/
+  /*Enable the file's write property */
   if (currentThread->exec_file != NULL)
     file_allow_write (currentThread->exec_file);
 
-  /*free files whose owner is the current thread*/
+  /*If current thread owns files, those files are freed. */
   close_file_by_owner (currentThread->tid);  
 
   parentThread = thread_get_by_id (currentThread->parent_id);
@@ -575,15 +567,10 @@ setup_stack (void **esp, const char *file_name)
 		*esp -= 4;
 		* (uint32_t *) *esp = (uint32_t) NULL;
 
-		/* scan throught the file name with arguments string downward,
-		 * using the cur_addr and total_length above to define boundary.
-		 * omitting the beginning space or '\0', but for every encounter
-		 * after, push the last non-space-and-'\0' address, which is current
-		 * address minus 1, as one of argv to the stack, and set the space to
-		 * '\0', multiple adjancent spaces and '0' is treated as one.
-		 */
+		/* Iterates through the file name using both the current_address and total_length as bounds. */
+		 
 		int i = total_length - 1;
-		/*omitting the starting space and '\0' */
+		/*Omits ' ' and '\0' */
 		while (*(argstr_head + i) == ' ' ||  *(argstr_head + i) == '\0')
 		  {
 			if (*(argstr_head + i) == ' ')
@@ -593,38 +580,38 @@ setup_stack (void **esp, const char *file_name)
 			i--;
 		  }
 
-		/*scan through args string, push args address into stack*/
-		char *mark;
-		for (mark = (char *)(argstr_head + i); i > 0;
-			 i--, mark = (char*)(argstr_head+i))
+		/*Iterates through args string, then pushes args address onto stack*/
+		char *arg;
+		for (arg = (char *)(argstr_head + i); i > 0;
+			 i--, arg = (char*)(argstr_head+i))
 		  {
-			/*detect args, if found, push it's address to stack*/
-			if ( (*mark == '\0' || *mark == ' ') &&
-				 (*(mark+1) != '\0' && *(mark+1) != ' '))
+			/* Searches for args, and if found it pushes its address to stack */
+			if ( (*arg == '\0' || *arg == ' ') &&
+				 (*(arg+1) != '\0' && *(arg+1) != ' '))
 			  {
 				*esp -= 4;
-				* (uint32_t *) *esp = (uint32_t) mark + 1;
+				* (uint32_t *) *esp = (uint32_t) arg + 1;
 				argc++;
 			  }
 			/*set space to '\0', so that each arg string will terminate*/
-			if (*mark == ' ')
-			  *mark = '\0';
+			if (*arg == ' ')
+			  *arg = '\0';
 		  }
 
-		/*push one more arg, which is the command name, into stack*/
+		/* Push an additional arg, the command line, into the stack*/
 		*esp -= 4;
 		* (uint32_t *) *esp = (uint32_t) argstr_head;
 		argc++;
 
-		/*push argv*/
+		/*Push argv*/
 		* (uint32_t *) (*esp - 4) = *(uint32_t *) esp;
 		*esp -= 4;
 
-		/*push argc*/
+		/*Pusg argc*/
 		*esp -= 4;
 		* (int *) *esp = argc;
 
-		/*push return address*/
+		/*Push the final return address*/
 		*esp -= 4;
 		* (uint32_t *) *esp = 0x0;
 	  } 
@@ -636,22 +623,13 @@ setup_stack (void **esp, const char *file_name)
     return success;
 }
 
-/* Adds a mapping from user virtual address UPAGE to kernel
-   virtual address KPAGE to the page table.
-   If WRITABLE is true, the user process may modify the page;
-   otherwise, it is read-only.
-   UPAGE must not already be mapped.
-   KPAGE should probably be a page obtained from the user pool
-   with palloc_get_page().
-   Returns true on success, false if UPAGE is already mapped or
-   if memory allocation fails. */
+/* Maps the page to the virtual address if NULL. Additionally the page will be writeable based upon the writeable parameter */
 static bool
 install_page (void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current ();
 
-  /* Verify that there's not already a page at that virtual
-     address, then map our page there. */
+  /* Check and make sure that the page location is empty, then map the page to that virtual address. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
