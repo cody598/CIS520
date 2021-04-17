@@ -6,6 +6,11 @@
 #include <stdint.h>
 #include "threads/synch.h"
 #include "filesys/file.h"
+#include "vm/page.h"
+#include "lib/kernel/hash.h"
+
+typedef int mapid_t;
+typedef int pid_t;
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -127,6 +132,13 @@ struct thread
 
     /* file struct represents the execuatable of the current thread */ 
     struct file *exec_file;
+	
+	 /* Supplemental Page Table; stored as a hash table */
+    struct hash suppl_page_table;
+
+    /* Memory Mapped File Table */
+    mapid_t mapid_allocator;
+    struct hash mmfiles; 
 #endif
 
     /* Owned by thread.c. */

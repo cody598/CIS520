@@ -11,6 +11,7 @@
 #include "threads/malloc.h"
 #include "filesys/file.h"
 #include "devices/input.h"
+#include "vm/page.h"
 
 struct file_descripton
 {
@@ -21,7 +22,9 @@ struct file_descripton
 };
 
 /* List constaining open files, the ones open in user process. */
-struct list open_files; 
+struct list open_files;
+
+static uint32_t *esp; 
 
 /* The lock that makes sure a single thread accesses the file system at a time. */
 struct lock fs_lock;
@@ -42,9 +45,12 @@ static int write (int, const void *, unsigned);
 static void seek (int, unsigned);
 static unsigned tell (int);
 static void close (int);
+static mapid_t mmap (int, void *);
+static void munmap (mapid_t);
 
 static struct file_descripton *get_open_file (int);
 static void close_open_file (int);
+static bool is_valid_uvaddr (const void *);
 bool is_valid_ptr (const void *);
 static int allocate_fd (void);
 void close_file_by_owner (tid_t);
@@ -61,7 +67,6 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f)
 {
-  uint32_t *esp;
   esp = f->esp;
 
   if (!is_valid_ptr (esp) || !is_valid_ptr (esp + 1) ||
@@ -113,6 +118,12 @@ syscall_handler (struct intr_frame *f)
         case SYS_CLOSE:
           close (*(esp + 1));
           break;
+		case SYS_MMAP:
+			f->eax = mmap (*(esp + 1), (void *) *(esp + 2));
+			break;
+		case SYS_MUNMAP:
+			munmap (*(esp + 1));
+			break;
         default:
           break;
         }
@@ -253,37 +264,75 @@ read (int fd, void *buffer, unsigned size)
 {
   struct file_descripton *fd_struct;
   int status = 0; 
-
-  if (!is_valid_ptr (buffer) || !is_valid_ptr (buffer + size - 1))
-    exit (-1);
-
-  lock_acquire (&fs_lock); 
+  struct thread *t = thread_current ();
   
-  if (fd == STDOUT_FILENO)
+  unsigned buffer_size = size;
+  void * buffer_tmp = buffer;
+
+  /* check the user memory pointing by buffer are valid */
+  while (buffer_tmp != NULL)
+  {
+    if (!is_valid_uvaddr (buffer_tmp))
+		exit (-1);
+
+    if (pagedir_get_page (t->pagedir, buffer_tmp) == NULL)   
+	{ 
+	  struct suppl_pte *spte;
+	  spte = get_suppl_pte (&t->suppl_page_table, pg_round_down (buffer_tmp));
+	  if (spte != NULL && !spte->is_loaded)
+	    load_page (spte);
+      else if (spte == NULL && buffer_tmp >= (esp - 32))
+	    grow_stack (buffer_tmp);
+	  else
+	    exit (-1);
+	}
+
+    /* Advance */
+    if (buffer_size == 0)
+	{
+	  /* terminate the checking loop */
+	  buffer_tmp = NULL;
+	}
+	
+    else if (buffer_size > PGSIZE)
+	{
+	  buffer_tmp += PGSIZE;
+	  buffer_size -= PGSIZE;
+	}
+	
+    else
+	{
+	  /* last loop */
+	  buffer_tmp = buffer + size - 1;
+	  buffer_size = 0;
+	}
+  }
+
+ lock_acquire (&fs_lock);   
+ if (fd == STDOUT_FILENO)
+    status = -1;
+ else if (fd == STDIN_FILENO)
+  {
+    uint8_t c;
+    unsigned counter = size;
+    uint8_t *buf = buffer;
+    while (counter > 1 && (c = input_getc()) != 0)
     {
-      lock_release (&fs_lock);
-      return -1;
+       *buf = c;
+       buffer++;
+       counter--; 
     }
-
-  if (fd == STDIN_FILENO)
-    {
-      uint8_t c;
-      unsigned counter = size;
-      uint8_t *buf = buffer;
-      while (counter > 1 && (c = input_getc()) != 0)
-        {
-          *buf = c;
-          buffer++;
-          counter--; 
-        }
-      *buf = 0;
-      lock_release (&fs_lock);
-      return (size - counter);
-    } 
-  
-  fd_struct = get_open_file (fd);
-  if (fd_struct != NULL)
-    status = file_read (fd_struct->file_struct, buffer, size);
+    *buf = 0;
+	status = size - counter;
+    lock_release (&fs_lock);
+    return (size - counter);
+  } 
+  else
+  {
+	fd_struct = get_open_file (fd);
+	if (fd_struct != NULL)
+		status = file_read (fd_struct->file_struct, buffer, size);
+  }
 
   lock_release (&fs_lock);
   return status;
@@ -295,27 +344,55 @@ write (int fd, const void *buffer, unsigned size)
   struct file_descripton *fd_struct;  
   int status = 0;
 
-  if (!is_valid_ptr (buffer) || !is_valid_ptr (buffer + size - 1))
-    exit (-1);
+  unsigned buffer_size = size;
+  void *buffer_tmp = buffer;
 
-  lock_acquire (&fs_lock); 
+  /* check the user memory pointing by buffer are valid */
+  while (buffer_tmp != NULL)
+  {
+    if (!is_valid_ptr (buffer_tmp))
+	   exit (-1);
 
+    /* Advance */ 
+    if (buffer_size > PGSIZE)
+	{
+	  buffer_tmp += PGSIZE;
+	  buffer_size -= PGSIZE;
+	}
+	
+    else if (buffer_size == 0)
+	{
+	  /* terminate the checking loop */
+	  buffer_tmp = NULL;
+	}
+	
+    else
+	{
+	  /* last loop */
+	  buffer_tmp = buffer + size - 1;
+	  buffer_size = 0;
+	}
+  }
+
+  lock_acquire (&fs_lock);
+  
   if (fd == STDIN_FILENO)
-    {
-      lock_release(&fs_lock);
-      return -1;
-    }
+  {
+     return -1;
+  }
 
-  if (fd == STDOUT_FILENO)
-    {
+  else if (fd == STDOUT_FILENO)
+  {
       putbuf (buffer, size);
-      lock_release(&fs_lock);
-      return size;
-    }
+      status = size;
+  }
+  else
+  {
+	 fd_struct = get_open_file (fd);
+     if (fd_struct != NULL)
+       status = file_write (fd_struct->file_struct, buffer, size); 
+  }
  
-  fd_struct = get_open_file (fd);
-  if (fd_struct != NULL)
-    status = file_write (fd_struct->file_struct, buffer, size);
   lock_release (&fs_lock);
   return status;
 }
@@ -356,6 +433,64 @@ close (int fd)
     close_open_file (fd);
   lock_release (&fs_lock);
   return ; 
+}
+
+mapid_t
+mmap (int fd, void *addr)
+{
+  struct file_descripton *fd_struct;
+  int32_t len;
+  struct thread *t = thread_current ();
+  int offset;
+
+  /* Validating conditions to determine whether to reject the request */
+  if (addr == NULL || addr == 0x0 || (pg_ofs (addr) != 0))
+    return -1;
+
+  /* Bad fds*/
+  if(fd == 0 || fd == 1)
+    return -1;
+  fd_struct = get_open_file (fd);
+  if (fd_struct == NULL)
+    return -1;
+
+  /* file length not equal to 0 */
+  len = file_length (fd_struct->file_struct);
+  if (len <= 0)
+    return -1;
+
+  /* iteratively check if there is enough space for the file starting
+   * from the uvaddr addr*/
+  offset = 0;
+  while (offset < len)
+    {
+      if (get_suppl_pte (&t->suppl_page_table, addr + offset))
+	return -1;
+
+      if (pagedir_get_page (t->pagedir, addr + offset))
+	return -1;
+
+      offset += PGSIZE;
+    }
+
+  /* Add an entry in memory mapped files table, and add entries in
+     supplemental page table iteratively which is in mmfiles_insert's
+     semantic.
+     If success, it will return the mapid;
+     otherwise, return -1 */
+  lock_acquire (&fs_lock);
+  struct file* newfile = file_reopen (fd_struct->file_struct);
+  lock_release (&fs_lock);
+  return (newfile == NULL) ? -1 : mmfiles_insert (addr, newfile, len);
+}
+
+void
+munmap (mapid_t mapping)
+{
+  /* Remove the entry in memory mapped files table, and remove corresponding
+     entries in supplemental page table iteratively which is in 
+     mmfiles_remove()'s semantic. */
+  mmfiles_remove (mapping);
 }
 
 struct file_descripton *
@@ -401,11 +536,17 @@ bool
 is_valid_ptr (const void *usr_ptr)
 {
   struct thread *current = thread_current ();
-  if (usr_ptr != NULL && is_user_vaddr (usr_ptr))
+  if (is_valid_uvaddr (usr_ptr))
     {
       return (pagedir_get_page (current->pagedir, usr_ptr)) != NULL;
     }
   return false;
+}
+
+static bool
+is_valid_uvaddr (const void *uvaddr)
+{
+  return (uvaddr != NULL && is_user_vaddr (uvaddr));
 }
 
 int

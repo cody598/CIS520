@@ -471,6 +471,7 @@ init_thread (struct thread *t, const char *name, int priority)
     lock_init (&t->lock_child);
     cond_init (&t->cond_child);
     list_init (&t->children);
+	t->mapid_allocator = 0; // Initialize the mapid allocator.
   #endif
   t->magic = THREAD_MAGIC;
   old_level = intr_disable ();
