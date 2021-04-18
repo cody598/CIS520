@@ -1,0 +1,223 @@
+		           +---------------------------+
+       	        	   |         CIS 520           |
+		           | PROJECT 3: Virtual Memory |
+		           |     DESIGN DOCUMENT       |
+		           +---------------------------+
+
+---- GROUP ----
+
+>> Fill in the names of your group members.
+
+Jack Johnson <jjohn98@ksu.edu>
+Abdulkareem Alkhiary <araasai@ksu.edu>
+Cody Morse <cody598@ksu.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+https://web.stanford.edu/~ouster/cgi-bin/cs140-spring20/pintos/pintos_4.html
+https://github.com/ChristianJHughes/pintos-project3
+https://github.com/codyjack/OS-pintos
+https://github.com/cctv2206/Pintos-project-3
+
+			PAGE TABLE MANAGEMENT
+			=====================
+
+Relevant Code Definitions:
+
+-Used to identify the specific supplemental page entry in the supplement page table. Defined in page.h
+enum suppl_pte_type
+{
+  SWAP = 001,  // the lowest bit is for swap, in binary …00-1
+  FILE = 002,  // the second bit is for file, in binary …01-0
+  MMF  = 004    // the last bit is for MMF, in binary ….10-0
+};
+
+-Used for file and memory mapped file. Defined in page.h.
+struct suppl_pte_data
+{
+  struct file * file;
+  off_t ofs;
+  uint32_t read_bytes;
+  uint32_t zero_bytes;
+  bool writable;
+};
+
+-Supplemental page table entry. Defined in page.h.
+struct suppl_pte
+{
+  void *uvaddr;   // Unique identifier of a page; the user virtual address
+  enum suppl_pte_type type;
+  struct suppl_pte_data data;
+  bool is_loaded;
+
+  -For potential swapping
+  size_t swap_slot_idx;
+  bool swap_writable;
+
+  struct hash_elem elem;
+};
+
+struct thread 
+{
+   …
+   #ifdef USERPROG
+     …
+     -Supplemental Page Table; stored as a hash table. Defined in thread.h.
+     struct hash suppl_page_table;
+     …
+   #endif
+   …
+}
+
+
+---- ALGORITHMS ----
+
+>> A1: In a few paragraphs, describe the existing code for locating the
+>> frame, if any, that contains the data of a given page.
+
+Initially, the user virtual address (the page), is checked to determine if it's mapped in user process page directory. This is done by using pagedir_get_page.
+If in fact the page is mapped, the result will be to return the frame.
+
+If a frame is not mapped to a page, then the relevant supplemental page table entry from the SPT (Supplemental Page Table) using the address of the page can be found. Interally, in
+the supplemental page table entry, the suppl_pte_type indicates if the page is from file/swap/mmfile/bool is_Loaded in order to indictae whether the page has been loaded into frame.
+If in fact the frame has not been loaded, then a frame is not available for that page. If there is a frame, then a relevant frame entry will be in the frame table. If the boolean stated 
+before is true the frame should be able to get it in the beginning.
+
+---- SYNCHRONIZATION ----
+
+>> A2: When two user processes both need a new frame at the same time,
+>> how are races avoided?
+
+When we are needing to allocate a frame, palloc_get_page is used.
+This function uses a lock to make sure that only one process at a time uses bitmap_scan_and_flip to get a free page index.
+Then once it has access to the bitmap it sets the pages index bit to be in use.
+Other processes are forced to wait until this bit goes back to idle before they can use it.
+
+		       PAGING TO AND FROM DISK
+		       =======================
+
+---- ALGORITHMS ----
+
+Relevant Code Definitions:
+
+-Frame list
+struct list vm_frames;
+
+-Frame table entry 
+struct vm_frame {
+  void *frame;
+  tid_t tid;
+  uint32_t *pte;
+  void *uva;
+  struct list_elem elem;
+  bool evictable;
+};
+
+>> B1: When a frame is required but none is free, some frame must be
+>> evicted.  Describe the algorithm used to choose a frame to evict.
+
+We first look at the whole list of vm_frames. We look for a frame with an access bit set to 0.
+While we look through the list, we clear the access bits.
+Once we find a frame to evict, we mot it to the end of the frame list.
+The only way a frame cannot be evicted is if their evictable status is set to false.
+
+>> B2: Explain your heuristic for deciding whether a page fault for an
+>> invalid virtual address should cause the stack to be extended into
+>> the page that faulted.
+
+If the fault_address is 32 bytes lower than the stack pointer, then we identify that as an invalid address.
+If not, we extend the stack by one page. The furthest eligible page fault is 32 bytes away from the stack pointer, and this is caused by PUSHA.
+
+			 MEMORY MAPPED FILES
+			 ===================
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+-The memory mapped file struct needs to contain map ID, mapped file, starting address in memory, and page count. Located in process.c.
+
+struct memoryMappedFile
+{
+  mapid_t mapid;
+  struct file* file;
+  void * start_addr;
+  unsigned pg_cnt; 
+  struct hash_elem elem;
+};
+
+struct thread 
+{
+    ...
+    #ifdef USERPROG
+    	...
+    	-Memory Maped Files table
+    	mapid_t mapid_allocator;
+    	struct hash mmfiles;
+    	#endif
+    	...
+}
+
+---- ALGORITHMS ----
+
+>> C2: Describe how memory mapped files integrate into your virtual
+>> memory subsystem.  Explain how the page fault and eviction
+>> processes differ between swap pages and other pages.
+
+For each process, we keep a hash table of memory mapped files. Before starting a process, we initialize the hash table.
+We then have mmap load files into memory and get mapid. munmap will then free the memory and check if the pages are dirty, 
+and if they are it then writes the page content back to the file. If they are not dirty, we just free the pages. When the process exits, 
+we free all the memory mapped files.
+
+>> C3: Explain how you determine whether a new file mapping overlaps
+>> any existing segment.
+
+Before we map, we get the length of the file and calculated the number of required pages.
+Since we have the uvaddr, we check if uvaddr, uvaddr + PGSIZE, or uvaddr + PGSIZE * (n - 1) have been mapped to any frames.
+Using the two pages tables, we check if there are any entries in either of them. If uvaddr exists in either of them, we return -1.
+
+---- RATIONALE ----
+
+>> C4: Mappings created with "mmap" have similar semantics to those of
+>> data demand-paged from executables, except that "mmap" mappings are
+>> written back to their original files, not to swap.  This implies
+>> that much of their implementation can be shared.  Explain why your
+>> implementation either does or does not share much of the code for
+>> the two situations.
+
+We have them as sharing the supplemental page data. This is due to us finding out that the two processes are mainly based on files.
+With this shared data structure, they also share alot of the same code. We think that this helps to reduce code redundancy and 
+improves readability.
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
